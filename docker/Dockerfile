@@ -307,7 +307,6 @@ RUN --mount=type=cache,target=/root/.cache/ccache \
 
 #################### EXTENSIONS BUILD IMAGE ####################
 # Build DeepGEMM, pplx-kernels, DeepEP - runs in PARALLEL with csrc-build
-# This stage is independent and doesn't affect csrc cache
 FROM base AS extensions-build
 ARG CUDA_VERSION
 
@@ -316,32 +315,34 @@ ENV UV_HTTP_TIMEOUT=500
 ENV UV_INDEX_STRATEGY="unsafe-best-match"
 ENV UV_LINK_MODE=copy
 
+# Ensure all build deps (git, curl, etc.) are present
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential cmake ninja-build && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace
 
-# Build DeepGEMM wheel
-# Default moved here from tools/install_deepgemm.sh for centralized version management
+# Build DeepGEMM wheel (broad arches for sm_80+)
 ARG DEEPGEMM_GIT_REF=477618cd51baffca09c4b0b87e97c03fe827ef03
 COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p /tmp/deepgemm/dist && \
-    VLLM_DOCKER_BUILD_CONTEXT=1 TORCH_CUDA_ARCH_LIST="9.0a 10.0a" /tmp/install_deepgemm.sh \
+    VLLM_DOCKER_BUILD_CONTEXT=1 TORCH_CUDA_ARCH_LIST="8.0 8.9 9.0 10.0 12.0a" /tmp/install_deepgemm.sh \
         --cuda-version "${CUDA_VERSION}" \
         ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} \
         --wheel-dir /tmp/deepgemm/dist || \
     echo "DeepGEMM build skipped (CUDA version requirement not met)"
 
-# Ensure the wheel dir exists so COPY won't fail when DeepGEMM is skipped
 RUN mkdir -p /tmp/deepgemm/dist && touch /tmp/deepgemm/dist/.deepgemm_skipped
 
-# Build pplx-kernels and DeepEP wheels
+# Build pplx-kernels and DeepEP wheels (broad arches for sm_80+ + your Blackwell sm_12.0)
 COPY tools/ep_kernels/install_python_libraries.sh /tmp/install_python_libraries.sh
-# Defaults moved here from tools/ep_kernels/install_python_libraries.sh for centralized version management
 ARG PPLX_COMMIT_HASH=12cecfd
 ARG DEEPEP_COMMIT_HASH=73b6ea4
 ARG NVSHMEM_VER
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p /tmp/ep_kernels_workspace/dist && \
-    export TORCH_CUDA_ARCH_LIST='9.0a 10.0a' && \
+    export TORCH_CUDA_ARCH_LIST='8.0 8.9 9.0 10.0 12.0a' && \
     /tmp/install_python_libraries.sh \
         --workspace /tmp/ep_kernels_workspace \
         --mode wheel \
